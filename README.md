@@ -6,8 +6,6 @@ it, and leaves a small readable diff.
 
 Design reference: [Design a Real-Time Voice AI Agent](https://outcomeschool.com/blog/design-a-real-time-voice-ai-agent)
 
-Built for teaching at **Outcome School** by **Amit Shekhar** as part of the: [AI and Machine Learning Program](https://outcomeschool.com/program/ai-and-machine-learning)
-
 ## How to run
 
 Needs Python 3.11+, Chrome, a [Deepgram](https://deepgram.com) API key (speech to text
