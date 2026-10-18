@@ -1,0 +1,6 @@
+.DS_Store
+.env
+.claude/
+__pycache__/
+.venv/
+traces.jsonl
