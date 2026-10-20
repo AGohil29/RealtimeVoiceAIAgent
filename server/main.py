@@ -1,62 +1,38 @@
-import asyncio
 import json
-import time
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket
 from fastapi.staticfiles import StaticFiles
 
 load_dotenv()
 
-app = FastAPI()
+from .pipeline import run_turn  # noqa: E402  (needs env vars loaded first)
 
-# 16kHz, 16-bit mono, 20ms per frame -> 320 samples -> 640 bytes
-SAMPLE_RATE = 16000
-FRAME_MS = 20
-FRAME_BYTES = SAMPLE_RATE * FRAME_MS // 1000 * 2
+app = FastAPI()
 
 
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
     await ws.accept()
-    frames = 0
-    bytes_total = 0
-    last_report = time.perf_counter()
+    audio = bytearray()   # frames collected while the user holds the button
+    messages = []         # conversation history for the LLM
 
-    try:
-        while True:
-            msg = await ws.receive()
-            if msg["type"] == "websocket.disconnect":
-                break
+    while True:
+        msg = await ws.receive()
+        if msg["type"] == "websocket.disconnect":
+            break
 
-            if "bytes" in msg and msg["bytes"] is not None:
-                # one 20ms PCM16 audio frame from the browser
-                frames += 1
-                bytes_total += len(msg["bytes"])
+        if msg.get("bytes") is not None:
+            audio += msg["bytes"]
+            continue
 
-            elif "text" in msg and msg["text"] is not None:
-                data = json.loads(msg["text"])
-                if data["type"] == "ping":
-                    # send the client's timestamp back so it can compute round-trip time
-                    await ws.send_json({"type": "pong", "t": data["t"]})
-
-            # once a second, tell the browser how much audio reached the server
-            now = time.perf_counter()
-            if now - last_report >= 1.0:
-                elapsed = now - last_report
-                await ws.send_json({
-                    "type": "stats",
-                    "frames_per_sec": round(frames / elapsed),
-                    "bytes_per_sec": round(bytes_total / elapsed),
-                    "frame_bytes": FRAME_BYTES,
-                })
-                frames = 0
-                bytes_total = 0
-                last_report = now
-
-    except WebSocketDisconnect:
-        pass
+        data = json.loads(msg["text"])
+        if data["type"] == "ping":
+            await ws.send_json({"type": "pong", "t": data["t"]})
+        elif data["type"] == "start":
+            audio.clear()
+        elif data["type"] == "end_of_speech":
+            await run_turn(ws, bytes(audio), messages)
 
 
-# serve the browser client from web/
 app.mount("/", StaticFiles(directory="web", html=True), name="web")

@@ -2,27 +2,37 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Voice AI Agent - Phase 0</title>
+  <title>Voice AI Agent - Phase 1</title>
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 40px auto; }
-    button { font-size: 18px; padding: 10px 24px; }
-    table { margin-top: 20px; border-collapse: collapse; }
-    td { padding: 6px 16px 6px 0; }
-    td:last-child { font-family: monospace; }
+    body { font-family: system-ui, sans-serif; max-width: 960px; margin: 40px auto; }
+    button { font-size: 18px; padding: 10px 24px; margin-right: 12px; }
+    #talk { user-select: none; }
+    table { margin-top: 20px; border-collapse: collapse; width: 100%; font-size: 14px; }
+    th, td { padding: 6px 10px; border-bottom: 1px solid #ddd; text-align: left; vertical-align: top; }
+    .bar span { display: inline-block; height: 12px; }
+    .legend span { display: inline-block; width: 12px; height: 12px; margin: 0 4px 0 12px; vertical-align: middle; }
+    .stt { background: #4c9be8; } .llm { background: #f0a030; } .tts { background: #5cb85c; }
   </style>
 </head>
 <body>
-  <h1>Phase 0 - Audio transport</h1>
-  <p>Mic -> 16kHz PCM16 -> 20ms frames -> WebSocket -> server</p>
+  <h1>Phase 1 - Batch pipeline</h1>
+  <p>Hold the button, speak, release. Audio -> STT -> LLM -> TTS -> audio, one after another.</p>
 
-  <button id="toggle">Start</button>
+  <button id="start">Start</button>
+  <button id="talk" disabled>Hold to talk</button>
+  <span>Status: <b id="status">idle</b></span>
+  <span style="margin-left:24px">Voice-to-voice: <b id="v2v">-</b></span>
 
+  <p class="legend"><small>Bar:</small><span class="stt"></span>STT <span class="llm"></span>LLM <span class="tts"></span>TTS</p>
   <table>
-    <tr><td>Status</td><td id="status">idle</td></tr>
-    <tr><td>Frames sent</td><td id="sent">0</td></tr>
-    <tr><td>Server frames/sec</td><td id="fps">-</td></tr>
-    <tr><td>Server bytes/sec</td><td id="bps">-</td></tr>
-    <tr><td>WebSocket RTT</td><td id="rtt">-</td></tr>
+    <thead>
+      <tr>
+        <th>#</th><th>You</th><th>Agent</th>
+        <th>STT ms</th><th>LLM ms</th><th>TTS ms</th><th>Server ms</th><th>V2V ms</th>
+        <th>Waterfall</th>
+      </tr>
+    </thead>
+    <tbody id="turns"></tbody>
   </table>
 
   <script type="module" src="app.js"></script>
