@@ -15,8 +15,16 @@
 - Added `benchmarks/simulate.py` to generate spoken test input and exercise the button protocol without a microphone; `--button` selects the current push-to-talk flow.
 - Added `httpx` to `requirements.txt` for asynchronous requests to the speech and language-model APIs.
 
+## Phase 2: Streaming LLM and TTS
+
+- Updated the OpenRouter client to stream response text as it is generated.
+- Split the streamed response into sentences and send each sentence to Deepgram's streaming TTS connection while the LLM generates the next.
+- Forwarded TTS audio chunks to the browser as they arrive, and scheduled playback back-to-back to avoid gaps between chunks.
+- Updated the interface to identify the streaming phase and show timing to the first LLM token, first sentence, and first audio byte, alongside total server time and voice-to-voice latency.
+- Added `websockets` to `requirements.txt` for the streaming Deepgram TTS connection.
+
 ## Configuration
 
 Set `DEEPGRAM_API_KEY` and `OPENROUTER_API_KEY` in a local `.env` file. Copy `.env.example` as a starting point; do not commit `.env`.
 
-This phase processes each recording in batches: transcription, language-model response, and speech synthesis run in sequence before reply audio is sent.
+Phase 1 processes each recording in batches: transcription, language-model response, and speech synthesis run in sequence before reply audio is sent. Phase 2 keeps transcription as a batch step, then streams the LLM response and TTS audio to reduce time to first audio.

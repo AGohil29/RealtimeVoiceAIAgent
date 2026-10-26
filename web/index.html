@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Voice AI Agent - Phase 1</title>
+  <title>Voice AI Agent - Phase 2</title>
   <style>
     body { font-family: system-ui, sans-serif; max-width: 960px; margin: 40px auto; }
     button { font-size: 18px; padding: 10px 24px; margin-right: 12px; }
@@ -11,25 +11,26 @@
     th, td { padding: 6px 10px; border-bottom: 1px solid #ddd; text-align: left; vertical-align: top; }
     .bar span { display: inline-block; height: 12px; }
     .legend span { display: inline-block; width: 12px; height: 12px; margin: 0 4px 0 12px; vertical-align: middle; }
-    .stt { background: #4c9be8; } .llm { background: #f0a030; } .tts { background: #5cb85c; }
+    .stt { background: #4c9be8; } .ttft { background: #f0a030; } .llm { background: #f7c873; } .tts { background: #5cb85c; }
   </style>
 </head>
 <body>
-  <h1>Phase 1 - Batch pipeline</h1>
-  <p>Hold the button, speak, release. Audio -> STT -> LLM -> TTS -> audio, one after another.</p>
+  <h1>Phase 2 - Streaming LLM and TTS</h1>
+  <p>Hold the button, speak, release. STT, then the LLM streams sentences and TTS speaks each one while the next is being written.</p>
 
   <button id="start">Start</button>
   <button id="talk" disabled>Hold to talk</button>
   <span>Status: <b id="status">idle</b></span>
   <span style="margin-left:24px">Voice-to-voice: <b id="v2v">-</b></span>
 
-  <p class="legend"><small>Bar:</small><span class="stt"></span>STT <span class="llm"></span>LLM <span class="tts"></span>TTS</p>
+  <p class="legend"><small>Bar:</small><span class="stt"></span>STT <span class="ttft"></span>LLM 1st token <span class="llm"></span>LLM 1st sentence <span class="tts"></span>TTS 1st byte</p>
   <table>
     <thead>
       <tr>
         <th>#</th><th>You</th><th>Agent</th>
-        <th>STT ms</th><th>LLM ms</th><th>TTS ms</th><th>Server ms</th><th>V2V ms</th>
-        <th>Waterfall</th>
+        <th>STT</th><th>LLM 1st token</th><th>LLM 1st sentence</th><th>TTS 1st byte</th>
+        <th>1st audio (server)</th><th>Server total</th><th>V2V</th>
+        <th>Path to first audio</th>
       </tr>
     </thead>
     <tbody id="turns"></tbody>

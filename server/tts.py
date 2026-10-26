@@ -1,22 +1,32 @@
+import json
 import os
 
-import httpx
+import websockets
 
-DEEPGRAM_URL = "https://api.deepgram.com/v1/speak"
+DEEPGRAM_URL = "wss://api.deepgram.com/v1/speak"
 SAMPLE_RATE = 24000
 
 
-async def synthesize(text: str) -> bytes:
-    """Turn text into a whole audio clip (PCM16, 24kHz, mono)."""
-    params = {
-        "model": "aura-2-thalia-en",
-        "encoding": "linear16",
-        "sample_rate": SAMPLE_RATE,
-        "container": "none",  # raw PCM, no WAV header
-    }
+async def connect():
+    """Open a streaming TTS connection. Audio comes back as PCM16, 24kHz, mono."""
+    url = f"{DEEPGRAM_URL}?model=aura-2-thalia-en&encoding=linear16&sample_rate={SAMPLE_RATE}"
     headers = {"Authorization": f"Token {os.environ['DEEPGRAM_API_KEY']}"}
-    async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.post(DEEPGRAM_URL, params=params, headers=headers, json={"text": text})
-        r.raise_for_status()
+    return await websockets.connect(url, additional_headers=headers)
 
-    return r.content
+
+async def speak(tts_ws, text: str):
+    """Queue a piece of text and ask Deepgram to start rendering it right away."""
+    await tts_ws.send(json.dumps({"type": "Speak", "text": text}))
+    await tts_ws.send(json.dumps({"type": "Flush"}))
+
+
+async def close(tts_ws):
+    """Tell Deepgram we are done. It renders anything left, then closes the socket."""
+    await tts_ws.send(json.dumps({"type": "Close"}))
+
+
+async def audio_chunks(tts_ws):
+    """Yield audio bytes as they arrive. JSON status messages are skipped."""
+    async for msg in tts_ws:
+        if isinstance(msg, bytes):
+            yield msg

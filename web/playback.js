@@ -1,12 +1,18 @@
-// Plays raw PCM16 audio received from the server through Web Audio.
+// Plays raw PCM16 audio chunks back to back, with no gaps, through Web Audio.
 
 export class Player {
   constructor() {
     this.ctx = new AudioContext();
+    this.nextTime = 0; // when the next chunk must start, in AudioContext time
   }
 
-  // returns the time (performance.now()) at which playback started
-  play(arrayBuffer, sampleRate) {
+  // call at the start of each agent reply
+  reset() {
+    this.nextTime = 0;
+  }
+
+  // schedule one chunk right after the previous one, returns its start time (performance.now())
+  enqueue(arrayBuffer, sampleRate) {
     const int16 = new Int16Array(arrayBuffer);
     const buffer = this.ctx.createBuffer(1, int16.length, sampleRate);
     const channel = buffer.getChannelData(0);
@@ -15,7 +21,10 @@ export class Player {
     const source = this.ctx.createBufferSource();
     source.buffer = buffer;
     source.connect(this.ctx.destination);
-    source.start();
-    return performance.now();
+
+    const startAt = Math.max(this.ctx.currentTime, this.nextTime);
+    source.start(startAt);
+    this.nextTime = startAt + buffer.duration;
+    return performance.now() + (startAt - this.ctx.currentTime) * 1000;
   }
 }
