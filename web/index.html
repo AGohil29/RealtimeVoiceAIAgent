@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Voice AI Agent - Phase 2</title>
+  <title>Voice AI Agent - Phase 3</title>
   <style>
     body { font-family: system-ui, sans-serif; max-width: 960px; margin: 40px auto; }
     button { font-size: 18px; padding: 10px 24px; margin-right: 12px; }
@@ -11,17 +11,21 @@
     th, td { padding: 6px 10px; border-bottom: 1px solid #ddd; text-align: left; vertical-align: top; }
     .bar span { display: inline-block; height: 12px; }
     .legend span { display: inline-block; width: 12px; height: 12px; margin: 0 4px 0 12px; vertical-align: middle; }
+    #live { min-height: 24px; margin-top: 16px; font-size: 18px; }
+    .interim { color: #999; } .final { color: #000; }
     .stt { background: #4c9be8; } .ttft { background: #f0a030; } .llm { background: #f7c873; } .tts { background: #5cb85c; }
   </style>
 </head>
 <body>
-  <h1>Phase 2 - Streaming LLM and TTS</h1>
-  <p>Hold the button, speak, release. STT, then the LLM streams sentences and TTS speaks each one while the next is being written.</p>
+  <h1>Phase 3 - Streaming STT</h1>
+  <p>Hold the button, speak, release. Audio streams to STT while you talk, so the transcript is almost done when you release.</p>
 
   <button id="start">Start</button>
   <button id="talk" disabled>Hold to talk</button>
   <span>Status: <b id="status">idle</b></span>
   <span style="margin-left:24px">Voice-to-voice: <b id="v2v">-</b></span>
+
+  <div id="live"></div>
 
   <p class="legend"><small>Bar:</small><span class="stt"></span>STT <span class="ttft"></span>LLM 1st token <span class="llm"></span>LLM 1st sentence <span class="tts"></span>TTS 1st byte</p>
   <table>
