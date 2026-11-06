@@ -5,8 +5,7 @@ const $ = (id) => document.getElementById(id);
 
 let ws = null;
 let player = null;
-let talking = false;
-let speechEndAt = 0;   // when the user released the button
+let speechEndAt = 0;   // when the user actually stopped speaking
 let sampleRate = 0;    // of the audio chunks for the current reply
 let firstChunk = true; // is the next chunk the first of this reply?
 let turn = 0;
@@ -16,12 +15,9 @@ async function start() {
   ws.binaryType = "arraybuffer";
 
   ws.onopen = async () => {
-    $("status").textContent = "connected";
+    $("status").textContent = "listening";
     player = new Player();
-    await startCapture((frame) => {
-      if (talking) ws.send(frame); // only send audio while the button is held
-    });
-    $("talk").disabled = false;
+    await startCapture((frame) => ws.send(frame)); // hands-free: every frame goes to the server
   };
 
   ws.onmessage = (e) => {
@@ -34,15 +30,32 @@ async function start() {
       return;
     }
     const msg = JSON.parse(e.data);
-    if (msg.type === "audio_start") {
+    if (msg.type === "speech_start") {
+      $("status").textContent = "you are speaking...";
+      $("live").textContent = "";
+    } else if (msg.type === "speech_end") {
+      // the server decided 700ms after the last speech, so the real end was 700ms ago
+      speechEndAt = performance.now() - msg.silence_ms;
+      $("status").textContent = "thinking...";
+    } else if (msg.type === "audio_start") {
       sampleRate = msg.sample_rate;
       firstChunk = true;
       player.reset();
+      $("status").textContent = "speaking";
     } else if (msg.type === "transcript") {
       $("live").textContent = msg.text;
       $("live").className = msg.final ? "final" : "interim";
-    } else if (msg.type === "turn_done") addTurn(msg);
-    else if (msg.type === "error") $("status").textContent = msg.message;
+    } else if (msg.type === "turn_done") {
+      addTurn(msg);
+      // tell the server once the last scheduled chunk has finished playing
+      setTimeout(() => {
+        ws.send(JSON.stringify({ type: "playback_done" }));
+        $("status").textContent = "listening";
+      }, player.remainingMs());
+    } else if (msg.type === "error") {
+      $("status").textContent = msg.message;
+      ws.send(JSON.stringify({ type: "playback_done" }));
+    }
   };
 }
 
@@ -54,28 +67,14 @@ function addTurn({ transcript, reply, timings: t }) {
       <td>${++turn}</td>
       <td>${transcript}</td>
       <td>${reply}</td>
-      <td>${t.stt}</td><td>${t.llm_first_token}</td><td>${t.llm_first_sentence}</td><td>${t.tts_first_byte}</td>
+      <td>${t.turn_detection}</td><td>${t.stt}</td><td>${t.llm_first_token}</td>
+      <td>${t.llm_first_sentence}</td><td>${t.tts_first_byte}</td>
       <td>${t.first_audio}</td><td>${t.total}</td><td>${v2v}</td>
-      <td><div class="bar">${bar("stt", t.stt)}${bar("ttft", t.llm_first_token)}${bar("llm", t.llm_first_sentence)}${bar("tts", t.tts_first_byte)}</div></td>
+      <td><div class="bar">${bar("vad", t.turn_detection)}${bar("stt", t.stt)}${bar("ttft", t.llm_first_token)}${bar("llm", t.llm_first_sentence)}${bar("tts", t.tts_first_byte)}</div></td>
     </tr>`);
-  $("status").textContent = "connected";
 }
 
 $("start").onclick = () => {
   $("start").disabled = true;
   start();
-};
-
-const talk = $("talk");
-talk.onpointerdown = () => {
-  talking = true;
-  $("live").textContent = "";
-  $("status").textContent = "listening...";
-  ws.send(JSON.stringify({ type: "start" }));
-};
-talk.onpointerup = () => {
-  talking = false;
-  speechEndAt = performance.now();
-  $("status").textContent = "thinking...";
-  ws.send(JSON.stringify({ type: "end_of_speech" }));
 };

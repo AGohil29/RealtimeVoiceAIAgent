@@ -23,8 +23,16 @@
 - Updated the interface to identify the streaming phase and show timing to the first LLM token, first sentence, and first audio byte, alongside total server time and voice-to-voice latency.
 - Added `websockets` to `requirements.txt` for the streaming Deepgram TTS connection.
 
+## Phase 4: Voice Activity Detection
+
+- Replaced push-to-talk with hands-free microphone streaming. Silero VAD detects speech start and end on the server, ending an utterance after 700 ms of silence.
+- Added a 300 ms audio pre-roll so speech onset is included when streaming the utterance to Deepgram; the server buffers 20 ms microphone frames into the 32 ms chunks required by VAD.
+- Starts transcription when speech is detected and returns to listening after the browser finishes playing the reply. The interaction remains half-duplex: microphone audio is ignored while the agent is responding.
+- Updated the interface with live speech status, VAD timing, and turn-detection timing in the per-turn metrics.
+- Added `pysilero-vad` to `requirements.txt`.
+
 ## Configuration
 
 Set `DEEPGRAM_API_KEY` and `OPENROUTER_API_KEY` in a local `.env` file. Copy `.env.example` as a starting point; do not commit `.env`.
 
-Phase 1 processes each recording in batches: transcription, language-model response, and speech synthesis run in sequence before reply audio is sent. Phase 2 keeps transcription as a batch step, then streams the LLM response and TTS audio to reduce time to first audio.
+Phase 1 processes each recording in batches: transcription, language-model response, and speech synthesis run in sequence before reply audio is sent. Phase 2 keeps transcription as a batch step, then streams the LLM response and TTS audio to reduce time to first audio. Phase 4 detects utterances automatically, streams speech to transcription as it is spoken, and continues streaming the LLM response and TTS audio.

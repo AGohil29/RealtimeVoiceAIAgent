@@ -28,10 +28,8 @@ async def ws_endpoint(ws: WebSocket):
         data = json.loads(msg["text"])
         if data["type"] == "ping":
             await ws.send_json({"type": "pong", "t": data["t"]})
-        elif data["type"] == "start":
-            await session.start_listening()
-        elif data["type"] == "end_of_speech":
-            await session.end_of_speech()
+        elif data["type"] == "playback_done":
+            await session.playback_done()
 
 
 app.mount("/", StaticFiles(directory="web", html=True), name="web")

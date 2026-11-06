@@ -11,6 +11,11 @@ export class Player {
     this.nextTime = 0;
   }
 
+  // how long until everything scheduled so far has finished playing
+  remainingMs() {
+    return Math.max(0, this.nextTime - this.ctx.currentTime) * 1000;
+  }
+
   // schedule one chunk right after the previous one, returns its start time (performance.now())
   enqueue(arrayBuffer, sampleRate) {
     const int16 = new Int16Array(arrayBuffer);
