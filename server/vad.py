@@ -1,7 +1,9 @@
+import time
+
 from pysilero_vad import SileroVoiceActivityDetector
 
 SPEECH_THRESHOLD = 0.5   # probability above this counts as speech
-SILENCE_MS = 700         # this much silence after speech means the user is done (for now)
+SILENCE_MS = 700         # silence after which the VAD considers this stretch of speech over
 CHUNK_MS = 32            # Silero looks at 512 samples at a time = 32ms at 16kHz
 
 
@@ -13,6 +15,7 @@ class VAD:
         self.buffer = b""
         self.speaking = False
         self.silence_ms = 0  # silence seen since the last speech chunk
+        self.last_speech_at = None  # wall clock of the last chunk that had speech
 
     def process(self, frame: bytes) -> str | None:
         self.buffer += frame
@@ -26,6 +29,7 @@ class VAD:
 
             if is_speech:
                 self.silence_ms = 0
+                self.last_speech_at = time.perf_counter()
                 if not self.speaking:
                     self.speaking = True
                     event = "speech_start"

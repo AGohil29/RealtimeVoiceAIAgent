@@ -15,6 +15,7 @@ app = FastAPI()
 async def ws_endpoint(ws: WebSocket):
     await ws.accept()
     session = Session(ws)
+    await session.start()
 
     while True:
         msg = await ws.receive()

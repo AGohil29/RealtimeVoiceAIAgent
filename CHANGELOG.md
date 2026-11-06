@@ -31,8 +31,16 @@
 - Updated the interface with live speech status, VAD timing, and turn-detection timing in the per-turn metrics.
 - Added `pysilero-vad` to `requirements.txt`.
 
+## Phase 5: Model-Based Turn Detection
+
+- Replaced silence-based utterance boundaries with Deepgram Flux, which uses the recognized conversation to determine when the user has finished speaking.
+- Kept a single Deepgram connection open for the session and streamed microphone audio continuously, including silence, in 80 ms chunks.
+- Used Flux `StartOfTurn`, transcript update, and `EndOfTurn` events to drive speech status, live transcription, and the start of agent response generation. Set the end-of-turn confidence threshold to 0.7.
+- Retained Silero VAD only to measure the delay between the last detected speech and Flux's end-of-turn decision; updated the browser metrics to use this measured timing.
+- Updated the interface to identify Phase 5 and explain that turn boundaries are based on conversational content rather than silence.
+
 ## Configuration
 
 Set `DEEPGRAM_API_KEY` and `OPENROUTER_API_KEY` in a local `.env` file. Copy `.env.example` as a starting point; do not commit `.env`.
 
-Phase 1 processes each recording in batches: transcription, language-model response, and speech synthesis run in sequence before reply audio is sent. Phase 2 keeps transcription as a batch step, then streams the LLM response and TTS audio to reduce time to first audio. Phase 4 detects utterances automatically, streams speech to transcription as it is spoken, and continues streaming the LLM response and TTS audio.
+Phase 1 processes each recording in batches: transcription, language-model response, and speech synthesis run in sequence before reply audio is sent. Phase 2 keeps transcription as a batch step, then streams the LLM response and TTS audio to reduce time to first audio. Phase 4 detects utterances using voice activity and streams speech to transcription. Phase 5 uses Deepgram Flux for continuous transcription and content-based turn detection, then continues streaming the LLM response and TTS audio.

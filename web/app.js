@@ -34,8 +34,8 @@ async function start() {
       $("status").textContent = "you are speaking...";
       $("live").textContent = "";
     } else if (msg.type === "speech_end") {
-      // the server decided 700ms after the last speech, so the real end was 700ms ago
-      speechEndAt = performance.now() - msg.silence_ms;
+      // the server tells us how long after your last word it decided, so we can measure from the real end
+      speechEndAt = performance.now() - msg.turn_detection_ms;
       $("status").textContent = "thinking...";
     } else if (msg.type === "audio_start") {
       sampleRate = msg.sample_rate;

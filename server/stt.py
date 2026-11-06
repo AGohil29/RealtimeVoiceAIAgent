@@ -3,35 +3,31 @@ import os
 
 import websockets
 
-DEEPGRAM_URL = "wss://api.deepgram.com/v1/listen"
+# Flux is Deepgram's conversational model: it transcribes AND decides when the turn is over.
+DEEPGRAM_URL = "wss://api.deepgram.com/v2/listen"
+EOT_THRESHOLD = 0.7   # end the turn when the model is this confident the user is done
+CHUNK_FRAMES = 4      # Flux works best with 80ms of audio at a time = 4 of our 20ms frames
 
 
 async def connect():
-    """Open a live transcription connection. We send PCM16 16kHz frames, it sends transcripts."""
-    params = "model=nova-3&encoding=linear16&sample_rate=16000&channels=1&interim_results=true&smart_format=true"
+    """One connection for the whole session. Audio flows in continuously, silence included."""
+    params = f"model=flux-general-en&encoding=linear16&sample_rate=16000&eot_threshold={EOT_THRESHOLD}"
     headers = {"Authorization": f"Token {os.environ['DEEPGRAM_API_KEY']}"}
     return await websockets.connect(f"{DEEPGRAM_URL}?{params}", additional_headers=headers)
 
 
-async def send_audio(stt_ws, frame: bytes):
-    await stt_ws.send(frame)
+async def send_audio(stt_ws, chunk: bytes):
+    await stt_ws.send(chunk)
 
 
-async def finish(stt_ws):
-    """No more audio. Deepgram sends the last final transcript, then closes the socket."""
-    await stt_ws.send(json.dumps({"type": "CloseStream"}))
+async def events(stt_ws):
+    """Yield (event, transcript) for every turn event Flux sends.
 
-
-async def transcripts(stt_ws):
-    """Yield (text, is_final) as Deepgram sends results.
-
-    Interim results (is_final False) are guesses that can still change.
-    Final results (is_final True) are fixed and will not change any more.
+    StartOfTurn  the user started speaking
+    Update       transcript so far, still changing
+    EndOfTurn    the model is confident the user is done, transcript is final
     """
     async for msg in stt_ws:
         data = json.loads(msg)
-        if data["type"] != "Results":
-            continue  # Metadata and other housekeeping messages
-        text = data["channel"]["alternatives"][0]["transcript"]
-        if text:
-            yield text, data["is_final"]
+        if data["type"] == "TurnInfo":
+            yield data["event"], data["transcript"]

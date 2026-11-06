@@ -1,15 +1,14 @@
 import asyncio
 import re
-from collections import deque
+import time
 
 from fastapi import WebSocket
 
 from . import llm, stt, tts
 from .trace import Trace
-from .vad import SILENCE_MS, VAD
+from .vad import VAD
 
 SENTENCE_END = re.compile(r"[.!?]\s")
-PREROLL_FRAMES = 15  # 300ms of audio kept from before speech_start, so no first syllable is lost
 
 
 async def sentences(text_stream, trace: Trace):
@@ -41,66 +40,55 @@ class Session:
     def __init__(self, ws: WebSocket):
         self.ws = ws
         self.messages = []   # conversation history for the LLM
-        self.vad = VAD()
+        self.vad = VAD()     # only used to know when the last speech chunk was, for measuring
         self.state = "listening"
-        self.preroll = deque(maxlen=PREROLL_FRAMES)
         self.stt_ws = None
-        self.finals = []     # final transcript pieces of the current utterance
-        self.reader = None   # task that reads transcripts from Deepgram
+        self.chunk = b""     # frames collected until we have 80ms for Flux
+        self.reader = None   # task that reads turn events from Deepgram
+
+    async def start(self):
+        """Open the STT connection once. It stays open for the whole session."""
+        self.stt_ws = await stt.connect()
+        self.reader = asyncio.create_task(self.read_events())
 
     async def on_audio(self, frame: bytes):
-        """Every 20ms frame: run VAD, and act on speech_start / speech_end."""
-        event = self.vad.process(frame)
-        self.preroll.append(frame)
+        """Every 20ms frame goes to Flux, in all states. Flux needs the silence too."""
+        self.vad.process(frame)
+        self.chunk += frame
+        if len(self.chunk) >= len(frame) * stt.CHUNK_FRAMES:
+            await stt.send_audio(self.stt_ws, self.chunk)
+            self.chunk = b""
 
-        if self.state == "listening" and event == "speech_start":
-            self.state = "user_speaking"
-            await self.ws.send_json({"type": "speech_start"})
-            await self.start_listening()
-            for old in self.preroll:  # includes the frames that arrived during connect
-                await stt.send_audio(self.stt_ws, old)
+    async def read_events(self):
+        """Turn events from Flux drive the state machine."""
+        async for event, transcript in stt.events(self.stt_ws):
+            if self.state == "listening" and event == "StartOfTurn":
+                self.state = "user_speaking"
+                await self.ws.send_json({"type": "speech_start"})
 
-        elif self.state == "user_speaking":
-            await stt.send_audio(self.stt_ws, frame)
-            if event == "speech_end":
-                self.state = "agent_turn"
-                await self.ws.send_json({"type": "speech_end", "silence_ms": SILENCE_MS})
-                asyncio.create_task(self.run_turn())  # keep reading frames while the agent replies
+            if self.state != "user_speaking":
+                continue  # while the agent is thinking or speaking, the user is ignored (half duplex, for now)
 
-        # while the agent is thinking or speaking, frames are ignored (half duplex, for now)
+            await self.ws.send_json({"type": "transcript", "text": transcript, "final": event == "EndOfTurn"})
+            if event == "EndOfTurn" and transcript:
+                await self.end_of_turn(transcript)
 
-    async def start_listening(self):
-        """Opens STT the moment speech starts."""
-        self.stt_ws = await stt.connect()
-        self.finals = []
-        self.reader = asyncio.create_task(self.read_transcripts())
-
-    async def read_transcripts(self):
-        """Collect final pieces and show the live transcript in the browser."""
-        async for text, is_final in stt.transcripts(self.stt_ws):
-            if is_final:
-                self.finals.append(text)
-            live = " ".join(self.finals if is_final else [*self.finals, text])
-            await self.ws.send_json({"type": "transcript", "text": live, "final": is_final})
+    async def end_of_turn(self, transcript: str):
+        """Flux is confident the user is done. The transcript is final, no waiting."""
+        self.state = "agent_turn"
+        turn_detection_ms = round((time.perf_counter() - self.vad.last_speech_at) * 1000)
+        await self.ws.send_json({"type": "speech_end", "turn_detection_ms": turn_detection_ms})
+        asyncio.create_task(self.run_turn(transcript, turn_detection_ms))  # frames keep flowing meanwhile
 
     async def playback_done(self):
         """The browser finished playing the reply. Back to listening."""
         self.vad.reset()
         self.state = "listening"
 
-    async def run_turn(self):
-        """Runs after speech_end. Most of the transcript is already done."""
+    async def run_turn(self, transcript: str, turn_detection_ms: int):
+        """Runs after the end of turn. The transcript is complete already."""
         trace = Trace()
-
-        await stt.finish(self.stt_ws)
-        await self.reader  # returns once Deepgram has sent the last final and closed
-        self.stt_ws = None
-        transcript = " ".join(self.finals)
-        trace.mark("stt_done")
-        if not transcript:
-            await self.ws.send_json({"type": "error", "message": "No speech detected"})
-            await self.playback_done()
-            return
+        trace.mark("stt_done")  # nothing to wait for any more, Flux gave us the final text with the decision
         self.messages.append({"role": "user", "content": transcript})
 
         await self.ws.send_json({"type": "audio_start", "sample_rate": tts.SAMPLE_RATE})
@@ -125,12 +113,12 @@ class Session:
             "transcript": transcript,
             "reply": reply.strip(),
             "timings": {
-                "turn_detection": SILENCE_MS,
+                "turn_detection": turn_detection_ms,
                 "stt": trace.marks["stt_done"],
                 "llm_first_token": trace.duration("stt_done", "llm_first_token"),
                 "llm_first_sentence": trace.duration("llm_first_token", "llm_first_sentence"),
                 "tts_first_byte": trace.duration("llm_first_sentence", "tts_first_byte"),
-                "first_audio": SILENCE_MS + trace.marks["tts_first_byte"],
-                "total": SILENCE_MS + trace.marks["audio_sent"],
+                "first_audio": turn_detection_ms + trace.marks["tts_first_byte"],
+                "total": turn_detection_ms + trace.marks["audio_sent"],
             },
         })
