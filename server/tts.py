@@ -25,8 +25,10 @@ async def close(tts_ws):
     await tts_ws.send(json.dumps({"type": "Close"}))
 
 
-async def audio_chunks(tts_ws):
-    """Yield audio bytes as they arrive. JSON status messages are skipped."""
+async def messages(tts_ws):
+    """Yield ("audio", bytes) as audio arrives, and ("flushed", n) when sentence n is fully rendered."""
     async for msg in tts_ws:
         if isinstance(msg, bytes):
-            yield msg
+            yield "audio", msg
+        elif json.loads(msg)["type"] == "Flushed":
+            yield "flushed", json.loads(msg)["sequence_id"]

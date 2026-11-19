@@ -9,6 +9,16 @@ let speechEndAt = 0;   // when the user actually stopped speaking
 let sampleRate = 0;    // of the audio chunks for the current reply
 let firstChunk = true; // is the next chunk the first of this reply?
 let turn = 0;
+let turnDone = false;  // has the server finished sending this reply?
+let doneTimer = null;  // fires playback_done when the last chunk has played
+
+function armPlaybackDone() {
+  clearTimeout(doneTimer);
+  doneTimer = setTimeout(() => {
+    ws.send(JSON.stringify({ type: "playback_done" }));
+    $("status").textContent = "listening";
+  }, player.remainingMs());
+}
 
 async function start() {
   ws = new WebSocket(`ws://${location.host}/ws`);
@@ -40,18 +50,30 @@ async function start() {
     } else if (msg.type === "audio_start") {
       sampleRate = msg.sample_rate;
       firstChunk = true;
+      turnDone = false;
       player.reset();
       $("status").textContent = "speaking";
+    } else if (msg.type === "pause_audio") {
+      player.pause();
+      clearTimeout(doneTimer);
+      $("status").textContent = `paused, you spoke for ${msg.after_ms} ms`;
+    } else if (msg.type === "resume_audio") {
+      player.resume();
+      if (turnDone) armPlaybackDone();
+      $("status").textContent = "speaking";
+    } else if (msg.type === "clear_audio") {
+      const playedMs = player.clear();
+      clearTimeout(doneTimer);
+      ws.send(JSON.stringify({ type: "played", ms: playedMs }));
+      $("status").textContent = `interrupted after ${Math.round(playedMs)} ms of reply`;
     } else if (msg.type === "transcript") {
       $("live").textContent = msg.text;
       $("live").className = msg.final ? "final" : "interim";
     } else if (msg.type === "turn_done") {
       addTurn(msg);
-      // tell the server once the last scheduled chunk has finished playing
-      setTimeout(() => {
-        ws.send(JSON.stringify({ type: "playback_done" }));
-        $("status").textContent = "listening";
-      }, player.remainingMs());
+      turnDone = true;
+      // tell the server once the last chunk has played. While paused the clock is frozen, resume will do it.
+      if (!player.paused) armPlaybackDone();
     } else if (msg.type === "error") {
       $("status").textContent = msg.message;
       ws.send(JSON.stringify({ type: "playback_done" }));

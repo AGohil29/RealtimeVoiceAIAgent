@@ -31,6 +31,8 @@ async def ws_endpoint(ws: WebSocket):
             await ws.send_json({"type": "pong", "t": data["t"]})
         elif data["type"] == "playback_done":
             await session.playback_done()
+        elif data["type"] == "played":
+            await session.on_played(data["ms"])
 
 
 app.mount("/", StaticFiles(directory="web", html=True), name="web")

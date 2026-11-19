@@ -16,6 +16,7 @@ class VAD:
         self.speaking = False
         self.silence_ms = 0  # silence seen since the last speech chunk
         self.last_speech_at = None  # wall clock of the last chunk that had speech
+        self.speech_ms = 0          # length of the current stretch of speech
 
     def process(self, frame: bytes) -> str | None:
         self.buffer += frame
@@ -29,9 +30,11 @@ class VAD:
 
             if is_speech:
                 self.silence_ms = 0
+                self.speech_ms += CHUNK_MS
                 self.last_speech_at = time.perf_counter()
                 if not self.speaking:
                     self.speaking = True
+                    self.speech_ms = CHUNK_MS
                     event = "speech_start"
             elif self.speaking:
                 self.silence_ms += CHUNK_MS
@@ -45,3 +48,4 @@ class VAD:
         self.buffer = b""
         self.speaking = False
         self.silence_ms = 0
+        self.speech_ms = 0
