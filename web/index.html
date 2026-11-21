@@ -2,12 +2,12 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Voice AI Agent - Phase 6</title>
+  <title>Voice AI Agent - Phase 7</title>
   <style>
     body { font-family: system-ui, sans-serif; max-width: 960px; margin: 40px auto; }
     button { font-size: 18px; padding: 10px 24px; margin-right: 12px; }
         table { margin-top: 20px; border-collapse: collapse; width: 100%; font-size: 14px; }
-    th, td { padding: 6px 10px; border-bottom: 1px solid #ddd; text-align: left; vertical-align: top; }
+    th, small { color: #888; } td { padding: 6px 10px; border-bottom: 1px solid #ddd; text-align: left; vertical-align: top; }
     .bar span { display: inline-block; height: 12px; }
     .legend span { display: inline-block; width: 12px; height: 12px; margin: 0 4px 0 12px; vertical-align: middle; }
     #live { min-height: 24px; margin-top: 16px; font-size: 18px; }
@@ -16,8 +16,8 @@
   </style>
 </head>
 <body>
-  <h1>Phase 6 - Barge-in</h1>
-  <p>Talk over the agent. It pauses within 300ms, and if you said real words it stops and listens. "Okay" or "mm-hmm" lets it carry on.</p>
+  <h1>Phase 7 - Latency</h1>
+  <p>Same pipeline, faster: fast-inference LLM host, connections opened ahead of time, LLM started before the turn is fully confirmed.</p>
 
   <button id="start">Start</button>
   <span>Status: <b id="status">idle</b></span>

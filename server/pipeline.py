@@ -16,6 +16,13 @@ BACKCHANNELS = {"okay", "ok", "yeah", "yes", "yep", "right", "sure", "alright", 
 STOP_WORDS = {"stop", "wait", "pause", "enough", "shh"}  # "wait, wait": the user wants quiet, nothing to answer
 MS_PER_BYTE = 1 / 48  # TTS audio is 24kHz, 16-bit: 48 bytes per millisecond
 MS_PER_WORD = 300     # Aura speaks about three words a second (measured)
+GREETING = "Hi! I am your voice assistant. What would you like to know?"
+greeting_audio = None  # rendered once at startup, then reused for every session
+
+
+async def prepare():
+    global greeting_audio
+    greeting_audio = await tts.synthesize(GREETING)
 
 
 def real_words(text: str) -> set[str]:
@@ -53,6 +60,16 @@ async def forward_audio(tts_ws, ws: WebSocket, trace: Trace, sentence_ends: list
     trace.mark("audio_sent")
 
 
+async def chain(first, rest):
+    """A stream that starts with one piece we already have, then continues with the rest."""
+    try:
+        yield await first
+    except StopAsyncIteration:
+        return  # the model sent nothing at all: an empty reply, not a crash
+    async for piece in rest:
+        yield piece
+
+
 class Session:
     """One browser connection. States: listening -> user_speaking -> agent_turn -> listening."""
 
@@ -65,6 +82,8 @@ class Session:
         self.chunk = b""     # frames collected until we have 80ms for Flux
         self.reader = None   # task that reads turn events from Deepgram
         self.turn = None     # task running the current agent turn
+        self.next_tts = None # a TTS connection opened ahead of time for the next reply
+        self.speculation = None  # an LLM request started on EagerEndOfTurn, before the turn is confirmed
         self.paused = False  # agent audio paused because the user started talking
         self.user_talking = False  # Flux has a user turn open (it may have started while the agent spoke)
         self.over_agent = False    # that turn started while the agent had the turn
@@ -74,9 +93,27 @@ class Session:
         self.sentence_ends = []  # audio position (ms) where each of those sentences ends
 
     async def start(self):
-        """Open the STT connection once. It stays open for the whole session."""
+        """Greet from cached audio, and use that time to open every connection we will need."""
+        self.state = "agent_turn"
+        self.sentences, self.sentence_ends = [GREETING], [len(greeting_audio) * MS_PER_BYTE]
+        self.messages.append({"role": "assistant", "content": GREETING})
+        await self.ws.send_json({"type": "audio_start", "sample_rate": tts.SAMPLE_RATE})
+        await self.ws.send_bytes(greeting_audio)
+        await self.ws.send_json({"type": "turn_done", "greeting": True})
+
+        # the user is listening to the greeting: pay the connection costs now, not on the first turn
         self.stt_ws = await stt.connect()
         self.reader = asyncio.create_task(self.read_events())
+        self.next_tts = asyncio.create_task(tts.connect())
+        asyncio.create_task(llm.warm_up())
+
+    async def tts_connection(self):
+        """Take the pre-opened TTS connection and immediately open another one for the next turn."""
+        tts_ws = await self.next_tts
+        self.next_tts = asyncio.create_task(tts.connect())
+        if tts_ws.close_code is not None:  # Deepgram closed it while we were idle, open a fresh one
+            tts_ws = await tts.connect()
+        return tts_ws
 
     async def on_audio(self, frame: bytes):
         """Every 20ms frame goes to Flux, in all states. Flux needs the silence too."""
@@ -119,12 +156,37 @@ class Session:
                 continue
 
             await self.ws.send_json({"type": "transcript", "text": transcript, "final": event == "EndOfTurn"})
-            if event == "EndOfTurn" and transcript:
+            if event == "EagerEndOfTurn" and transcript:
+                self.speculate(transcript)
+            elif event == "TurnResumed":
+                self.drop_speculation()
+            elif event == "EndOfTurn" and transcript:
                 real = real_words(transcript)
                 if (self.over_agent and not real) or (real and real <= STOP_WORDS):
+                    self.drop_speculation()
                     self.state = "listening"  # "okay" over the agent, or just "wait" / "stop": stop and listen, nothing to answer
                     continue
                 await self.end_of_turn(transcript)  # anything else is answered, even one word ("Yes please", "Mars?")
+
+    def speculate(self, transcript: str):
+        """Flux thinks the user is probably done. Start the LLM now, in case it is right."""
+        self.drop_speculation()
+        stream = llm.chat_stream([*self.messages, {"role": "user", "content": transcript}])
+        self.speculation = (transcript, stream, asyncio.create_task(anext(stream)))
+
+    def drop_speculation(self):
+        if self.speculation:
+            self.speculation[2].cancel()
+            self.speculation = None
+
+    def take_speculation(self, transcript: str):
+        """If the confirmed transcript matches the guess, use the reply already in flight."""
+        if not self.speculation or self.speculation[0] != transcript:
+            self.drop_speculation()
+            return None
+        _, stream, first = self.speculation
+        self.speculation = None
+        return chain(first, stream)
 
     async def resume(self):
         if self.paused:
@@ -133,7 +195,8 @@ class Session:
 
     async def interrupt(self):
         """Stop everything the agent is doing and hand the turn to the user."""
-        self.turn.cancel()
+        if self.turn:
+            self.turn.cancel()
         self.paused = False
         self.state = "user_speaking"
         self.played = asyncio.get_running_loop().create_future()
@@ -185,11 +248,15 @@ class Session:
 
         await self.ws.send_json({"type": "audio_start", "sample_rate": tts.SAMPLE_RATE})
         self.sentences, self.sentence_ends = [], []
-        tts_ws = await tts.connect()
+        tts_ws = await self.tts_connection()
         forward = asyncio.create_task(forward_audio(tts_ws, self.ws, trace, self.sentence_ends))
 
+        stream = self.take_speculation(transcript)
+        speculated = stream is not None
+        if not speculated:
+            stream = llm.chat_stream(self.messages)
         try:
-            async for sentence in sentences(llm.chat_stream(self.messages), trace):
+            async for sentence in sentences(stream, trace):
                 if not self.sentences:
                     trace.mark("llm_first_sentence")
                 self.sentences.append(sentence)
@@ -204,12 +271,16 @@ class Session:
             return                # interrupt() keeps what was heard
         reply = " ".join(self.sentences)
         self.messages.append({"role": "assistant", "content": reply})
+        trace.marks["turn_detection"] = turn_detection_ms
+        trace.marks["first_audio"] = turn_detection_ms + trace.marks["tts_first_byte"]  # from the real end of speech
         trace.save()
 
         await self.ws.send_json({
             "type": "turn_done",
             "transcript": transcript,
             "reply": reply,
+            "provider": llm.last_provider,
+            "speculated": speculated,
             "timings": {
                 "turn_detection": turn_detection_ms,
                 "stt": trace.marks["stt_done"],

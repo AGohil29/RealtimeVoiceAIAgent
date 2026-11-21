@@ -1,4 +1,5 @@
 import json
+from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket
@@ -6,9 +7,17 @@ from fastapi.staticfiles import StaticFiles
 
 load_dotenv()
 
-from .pipeline import Session  # noqa: E402  (needs env vars loaded first)
+from . import pipeline  # noqa: E402  (needs env vars loaded first)
+from .pipeline import Session  # noqa: E402
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(app):
+    await pipeline.prepare()  # render the greeting once, before the first user arrives
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 
 
 @app.websocket("/ws")

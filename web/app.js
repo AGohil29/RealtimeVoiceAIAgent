@@ -70,7 +70,7 @@ async function start() {
       $("live").textContent = msg.text;
       $("live").className = msg.final ? "final" : "interim";
     } else if (msg.type === "turn_done") {
-      addTurn(msg);
+      if (!msg.greeting) addTurn(msg);
       turnDone = true;
       // tell the server once the last chunk has played. While paused the clock is frozen, resume will do it.
       if (!player.paused) armPlaybackDone();
@@ -81,15 +81,15 @@ async function start() {
   };
 }
 
-function addTurn({ transcript, reply, timings: t }) {
+function addTurn({ transcript, reply, provider, speculated, timings: t }) {
   const v2v = $("v2v").textContent;
   const bar = (name, ms) => `<span class="${name}" style="width:${ms / 10}px"></span>`;
   $("turns").insertAdjacentHTML("afterbegin", `
     <tr>
       <td>${++turn}</td>
       <td>${transcript}</td>
-      <td>${reply}</td>
-      <td>${t.turn_detection}</td><td>${t.stt}</td><td>${t.llm_first_token}</td>
+      <td>${reply} <small>(${provider})</small></td>
+      <td>${t.turn_detection}</td><td>${t.stt}</td><td>${t.llm_first_token}${speculated ? " <small>(early)</small>" : ""}</td>
       <td>${t.llm_first_sentence}</td><td>${t.tts_first_byte}</td>
       <td>${t.first_audio}</td><td>${t.total}</td><td>${v2v}</td>
       <td><div class="bar">${bar("vad", t.turn_detection)}${bar("stt", t.stt)}${bar("ttft", t.llm_first_token)}${bar("llm", t.llm_first_sentence)}${bar("tts", t.tts_first_byte)}</div></td>
