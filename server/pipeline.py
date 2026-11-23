@@ -1,13 +1,17 @@
 import asyncio
+import json
+import logging
+import random
 import re
 import time
 
 from fastapi import WebSocket
 
-from . import llm, stt, tts
+from . import llm, stt, tools, tts
 from .trace import Trace
 from .vad import VAD
 
+log = logging.getLogger("uvicorn.error")
 SENTENCE_END = re.compile(r"[.!?]\s")
 BARGE_IN_MIN_MS = 300  # the user must speak this long over the agent before we react
 BACKCHANNELS = {"okay", "ok", "yeah", "yes", "yep", "right", "sure", "alright", "hmm", "hm", "hum", "mhm",
@@ -17,6 +21,7 @@ STOP_WORDS = {"stop", "wait", "pause", "enough", "shh"}  # "wait, wait": the use
 MS_PER_BYTE = 1 / 48  # TTS audio is 24kHz, 16-bit: 48 bytes per millisecond
 MS_PER_WORD = 300     # Aura speaks about three words a second (measured)
 GREETING = "Hi! I am your voice assistant. What would you like to know?"
+FILLERS = ["Let me check that for you.", "One moment, looking that up.", "Sure, give me a second."]
 greeting_audio = None  # rendered once at startup, then reused for every session
 
 
@@ -38,6 +43,9 @@ async def sentences(text_stream, trace: Trace):
     async for piece in text_stream:
         if "llm_first_token" not in trace.marks:
             trace.mark("llm_first_token")
+        if not isinstance(piece, str):
+            yield piece  # a ToolCall, passed through untouched
+            continue
         buffer += piece
         while match := SENTENCE_END.search(buffer):
             yield buffer[: match.end()].strip()
@@ -255,39 +263,73 @@ class Session:
         speculated = stream is not None
         if not speculated:
             stream = llm.chat_stream(self.messages)
+        tool_ms = 0
         try:
-            async for sentence in sentences(stream, trace):
-                if not self.sentences:
+            while True:  # one round of LLM output; a second round follows if it asked for tools
+                calls, text = [], ""
+                async for item in sentences(stream, trace):
+                    if isinstance(item, llm.ToolCall):
+                        calls.append(item)
+                        continue
+                    if "llm_first_sentence" not in trace.marks:
+                        trace.mark("llm_first_sentence")
+                    self.sentences.append(item)
+                    text += item + " "
+                    await tts.speak(tts_ws, item)  # TTS starts on this sentence while LLM writes the next
+                if not calls:
+                    break
+
+                # the tools take a while: say something now, so the silence does not feel like a crash
+                filler = random.choice(FILLERS)
+                if "llm_first_sentence" not in trace.marks:
                     trace.mark("llm_first_sentence")
-                self.sentences.append(sentence)
-                await tts.speak(tts_ws, sentence)  # TTS starts on this sentence while LLM writes the next
+                self.sentences.append(filler)
+                await tts.speak(tts_ws, filler)
+
+                results = []
+                for call in calls:
+                    started = time.perf_counter()
+                    result = await tools.run(call.name, json.loads(call.arguments or "{}"))
+                    tool_ms += round((time.perf_counter() - started) * 1000)
+                    results.append({"role": "tool", "tool_call_id": call.id, "content": json.dumps(result)})
+                # calls and results go into the history together: an interruption never leaves a call unanswered
+                self.messages += [{"role": "assistant", "content": text or None,
+                                   "tool_calls": [c.as_message() for c in calls]}, *results]
+                stream = llm.chat_stream(self.messages)  # now answer with the results
             trace.mark("llm_done")
 
             await tts.close(tts_ws)
             await forward  # ends when Deepgram has sent the last chunk and closed the socket
+
+            reply = " ".join(self.sentences)
+            self.messages.append({"role": "assistant", "content": reply})
+            trace.marks["turn_detection"] = turn_detection_ms
+            trace.marks["first_audio"] = turn_detection_ms + trace.marks["tts_first_byte"]  # from the real end of speech
+            trace.save()
+
+            await self.ws.send_json({
+                "type": "turn_done",
+                "transcript": transcript,
+                "reply": reply,
+                "provider": llm.last_provider,
+                "speculated": speculated,
+                "tool_ms": tool_ms,
+                "timings": {
+                    "turn_detection": turn_detection_ms,
+                    "stt": trace.marks["stt_done"],
+                    "llm_first_token": trace.duration("stt_done", "llm_first_token"),
+                    "llm_first_sentence": trace.duration("llm_first_token", "llm_first_sentence"),
+                    "tts_first_byte": trace.duration("llm_first_sentence", "tts_first_byte"),
+                    "first_audio": turn_detection_ms + trace.marks["tts_first_byte"],
+                    "total": turn_detection_ms + trace.marks["audio_sent"],
+                },
+            })
         except asyncio.CancelledError:
             forward.cancel()      # interrupted: stop forwarding audio
             await tts_ws.close()  # and stop Deepgram rendering
             return                # interrupt() keeps what was heard
-        reply = " ".join(self.sentences)
-        self.messages.append({"role": "assistant", "content": reply})
-        trace.marks["turn_detection"] = turn_detection_ms
-        trace.marks["first_audio"] = turn_detection_ms + trace.marks["tts_first_byte"]  # from the real end of speech
-        trace.save()
-
-        await self.ws.send_json({
-            "type": "turn_done",
-            "transcript": transcript,
-            "reply": reply,
-            "provider": llm.last_provider,
-            "speculated": speculated,
-            "timings": {
-                "turn_detection": turn_detection_ms,
-                "stt": trace.marks["stt_done"],
-                "llm_first_token": trace.duration("stt_done", "llm_first_token"),
-                "llm_first_sentence": trace.duration("llm_first_token", "llm_first_sentence"),
-                "tts_first_byte": trace.duration("llm_first_sentence", "tts_first_byte"),
-                "first_audio": turn_detection_ms + trace.marks["tts_first_byte"],
-                "total": turn_detection_ms + trace.marks["audio_sent"],
-            },
-        })
+        except Exception:
+            log.exception("turn failed")  # a background task would otherwise fail silently
+            forward.cancel()
+            await tts_ws.close()
+            await self.ws.send_json({"type": "error", "message": "Something went wrong, please try again"})
